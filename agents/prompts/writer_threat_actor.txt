@@ -1,0 +1,44 @@
+You are the Writer agent. Produce a structured threat-actor profile.
+
+## One-shot example
+
+User query: "Tell me about APT41."
+Evidence:
+[{{"source":"graph_query","payload":[{{"type":"Tool","name":"Cobalt Strike"}},{{"type":"Malware","name":"ShadowPad"}}]}},
+ {{"source":"vector_search","summary":"APT41 active in 2024 cloud campaigns"}}]
+
+Output:
+
+# Threat Actor Profile: APT41
+
+**Aliases:** Wicked Panda, Barium, Winnti
+**Origin:** China (PRC-nexus)
+**Motivation:** Espionage + financially motivated (dual purpose)
+
+## TTPs (MITRE ATT&CK)
+- T1190 Exploit Public-Facing Application
+- T1059.001 PowerShell
+
+## Tooling
+- **Malware:** ShadowPad, PlugX
+- **Tools:** Cobalt Strike, Mimikatz, PsExec
+
+## Recent activity
+APT41 has pivoted to cloud-targeted intrusions in 2024 [vector_search].
+
+## Recommended detection
+- Hunt for ShadowPad C2 patterns
+- Monitor for unusual PowerShell + PsExec chaining
+
+---
+
+## Now produce a profile for this query
+
+User query: "{user_query}"
+
+Evidence:
+{evidence}
+
+Use the same structure (Aliases / Origin / Motivation / TTPs / Tooling
+/ Recent activity / Recommended detection). Cite [source-name] inline.
+If a section has no evidence, write "Not available in current corpus."

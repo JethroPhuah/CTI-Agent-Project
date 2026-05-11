@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Environments / secrets
+.env
+.env.local
+*.key
+
+# Frontend
+node_modules/
+.next/
+out/
+.turbo/
+
+# Data
+data/raw/
+data/processed/
+*.npy
+*.faiss
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+logs/
+*.log

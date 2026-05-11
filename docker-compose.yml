@@ -1,0 +1,202 @@
+version: "3.8"
+
+# ----------------------------------------------------------------------
+# CTI Agent — Multi-Agent Threat Intelligence Platform
+# Brings up: Milvus, Elasticsearch, Neo4j, Postgres, 3x MCP servers,
+# FastAPI agent backend, Next.js frontend.
+# ----------------------------------------------------------------------
+
+networks:
+  cti-net:
+    driver: bridge
+
+volumes:
+  milvus-etcd:
+  milvus-minio:
+  milvus-data:
+  es-data:
+  neo4j-data:
+  neo4j-logs:
+  pg-data:
+
+services:
+
+  # ============================
+  # Vector DB stack (Milvus)
+  # ============================
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: cti-etcd
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - milvus-etcd:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    networks: [cti-net]
+
+  minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    container_name: cti-minio
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    volumes:
+      - milvus-minio:/minio_data
+    command: minio server /minio_data
+    networks: [cti-net]
+
+  milvus:
+    image: milvusdb/milvus:v2.3.4
+    container_name: cti-milvus
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    volumes:
+      - milvus-data:/var/lib/milvus
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    depends_on: [etcd, minio]
+    networks: [cti-net]
+
+  # ============================
+  # Full-text search (Elasticsearch)
+  # ============================
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
+    container_name: cti-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    networks: [cti-net]
+
+  # ============================
+  # STIX knowledge graph (Neo4j)
+  # ============================
+  neo4j:
+    # 5.20 is the last-known-good 5.x community tag with APOC core
+    # plugin auto-install; 5.15 has a Neo4jAdminBoot classpath bug.
+    image: neo4j:5.20-community
+    container_name: cti-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/cti_password_123
+      NEO4J_PLUGINS: '["apoc"]'
+      # Neo4j 5 renamed the unrestricted-procedures setting. The env-var
+      # convention also changed: dots in the property name become double
+      # underscores, single underscores stay as-is.
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
+      NEO4J_dbms_security_procedures_allowlist: "apoc.*"
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    networks: [cti-net]
+
+  # ============================
+  # IOC + Feedback DB (Postgres)
+  # ============================
+  postgres:
+    image: postgres:16-alpine
+    container_name: cti-postgres
+    environment:
+      POSTGRES_USER: cti
+      POSTGRES_PASSWORD: cti_password_123
+      POSTGRES_DB: cti
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./databases/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    networks: [cti-net]
+
+  # ============================
+  # MCP servers (one per tool category)
+  # ============================
+  retrieval-mcp:
+    build:
+      context: .
+      dockerfile: mcp_servers/retrieval_mcp/Dockerfile
+    container_name: cti-retrieval-mcp
+    env_file: .env
+    environment:
+      MILVUS_HOST: milvus
+      ELASTICSEARCH_HOST: elasticsearch
+      NEO4J_URI: bolt://neo4j:7687
+      POSTGRES_HOST: postgres
+    ports:
+      - "8101:8101"
+    depends_on: [milvus, elasticsearch, neo4j, postgres]
+    networks: [cti-net]
+
+  search-mcp:
+    build:
+      context: .
+      dockerfile: mcp_servers/search_mcp/Dockerfile
+    container_name: cti-search-mcp
+    env_file: .env
+    ports:
+      - "8102:8102"
+    networks: [cti-net]
+
+  enrichment-mcp:
+    build:
+      context: .
+      dockerfile: mcp_servers/enrichment_mcp/Dockerfile
+    container_name: cti-enrichment-mcp
+    env_file: .env
+    ports:
+      - "8103:8103"
+    networks: [cti-net]
+
+  # ============================
+  # Agent backend (FastAPI + LangGraph)
+  # ============================
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: cti-api
+    env_file: .env
+    environment:
+      # MCP servers
+      RETRIEVAL_MCP_URL: http://retrieval-mcp:8101/sse
+      SEARCH_MCP_URL: http://search-mcp:8102/sse
+      ENRICHMENT_MCP_URL: http://enrichment-mcp:8103/sse
+      # Inside the compose network, services are reachable by service name,
+      # not localhost. These overrides apply to anything the api container
+      # runs -- including ad-hoc commands like
+      # `docker compose exec api python -m ingestion.pipeline`.
+      MILVUS_HOST: milvus
+      ELASTICSEARCH_HOST: elasticsearch
+      NEO4J_URI: bolt://neo4j:7687
+      POSTGRES_HOST: postgres
+    ports:
+      - "8000:8000"
+    depends_on: [retrieval-mcp, search-mcp, enrichment-mcp, postgres]
+    networks: [cti-net]
+
+  # ============================
+  # Next.js frontend
+  # ============================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cti-frontend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on: [api]
+    networks: [cti-net]

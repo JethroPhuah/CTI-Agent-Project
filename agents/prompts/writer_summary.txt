@@ -1,0 +1,40 @@
+You are the Writer agent. Produce a clear, concise summary of the
+evidence below in response to the user's request.
+
+## One-shot example
+
+User query: "Summarize this APT41 report."
+Evidence:
+[{{"source":"vector_search","summary":"APT41 leveraged ShadowPad and Cobalt Strike, exploiting CVE-2023-3519 against Citrix appliances. C2: 185.12.45.78"}}]
+
+Output:
+
+**Summary — APT41 cloud campaign**
+
+APT41 conducted a targeted intrusion using ShadowPad and Cobalt Strike,
+gaining initial access through CVE-2023-3519 in unpatched Citrix
+appliances. Post-exploitation tradecraft included PowerShell, PsExec
+and Mimikatz, with C2 traffic to 185.12.45.78.
+
+**Key indicators**
+- IP: 185.12.45.78 (C2)
+- CVE: CVE-2023-3519 (initial access)
+- Tools: ShadowPad, Cobalt Strike, Mimikatz
+
+**Recommended actions**
+- Patch Citrix ADC/Gateway to current versions
+- Block C2 IP at the perimeter
+- Hunt for ShadowPad / Cobalt Strike beacon traffic
+
+---
+
+## Now produce a summary for this query
+
+User query: "{user_query}"
+
+Evidence:
+{evidence}
+
+Write a tight summary using the structure above (heading → narrative →
+key indicators → recommended actions). Use Markdown. Cite sources
+inline as [source-name] when stating facts.

@@ -1,0 +1,73 @@
+# =====================================================================
+# Core agentic stack
+# Range pins on langchain-* because their internal version constraints
+# move fast; lower bounds are what we actually need, upper bounds keep
+# us inside the major version we tested against.
+# =====================================================================
+# langchain-core >= 0.3.50 introduced langchain_core.messages.content,
+# which langchain-mcp-adapters 0.1.x imports at module load time.
+# Without this floor, importing the adapters crashes the api process.
+langchain>=0.3.18,<0.4
+langchain-core>=0.3.50,<0.4
+langchain-openai>=0.2.14,<0.4
+langchain-community>=0.3.18,<0.4
+# 0.4.x reorganised internals (langgraph._internal) and breaks
+# `from langgraph.prebuilt import create_react_agent`. Stay on 0.2.x.
+langgraph>=0.2.50,<0.3
+# langchain-mcp-adapters intentionally NOT used -- it's a moving
+# target whose internal langchain-core requirements drift weekly.
+# We bridge MCP tools to LangChain ourselves in agents/tools/mcp_loader.py
+# using only the mcp SDK (already pinned above) and pydantic.
+
+# MCP server SDK
+# >=1.6 contains the fix for `issubclass(annotation, Context)` blowing
+# up on parameters typed as Optional / subscripted generics. We also
+# refactor tool signatures to bare classes for cross-version safety.
+mcp>=1.6.0,<2
+
+# Web framework
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+sse-starlette==2.1.3
+pydantic==2.9.2
+pydantic-settings==2.6.1
+python-multipart==0.0.12
+httpx==0.27.2
+
+# Databases
+pymilvus==2.4.9
+elasticsearch==8.11.0
+neo4j==5.26.0
+psycopg[binary,pool]==3.2.3
+# (SQLAlchemy not pinned -- pulled transitively by langchain-community
+#  with the version it actually supports; we never call it directly.)
+
+# Embeddings
+sentence-transformers==3.3.1
+torch==2.5.1
+
+# Data ingestion
+feedparser==6.0.11
+beautifulsoup4==4.12.3
+trafilatura==1.12.2
+python-dateutil==2.9.0
+tiktoken==0.8.0
+
+# STIX / threat intel
+stix2==3.0.1
+taxii2-client==2.3.0
+
+# IOC extraction
+iocextract==1.16.1
+
+# External enrichment SDKs (optional, for live mode)
+# tavily-python is lazy-imported inside search_mcp; if you set
+# TAVILY_API_KEY but don't install this, the server falls back to mock.
+tavily-python==0.5.0
+# (VirusTotal: vt-py removed -- the adapter uses httpx directly.)
+
+# Utilities
+python-dotenv==1.0.1
+PyYAML==6.0.2
+tenacity==9.0.0
+structlog==24.4.0
