@@ -6,7 +6,7 @@ This repository is a public, synthetic data version of a production Agentic AI s
 
 ## CTI Agent Demo
 <p align="center">
-  <img src="cti-agent.gif" width="100%" alt="CTI Agent Demo">
+  <img src="cti-agent-final.gif" width="100%" alt="CTI Agent Demo">
 </p>
 
 ## What an analyst's flow looks like in the system
