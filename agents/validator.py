@@ -1,4 +1,4 @@
-"""Validator agent -- checks the writer's answer against the evidence."""
+"""Validator agent: decides whether the writer's answer is grounded in the evidence."""
 import json
 import logging
 import re

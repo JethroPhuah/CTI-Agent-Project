@@ -29,7 +29,7 @@ class EnrichmentAdapter(ABC):
 
 
 # ---------------------------------------------------------------------
-# Helpers — deterministic mock so the same IOC always returns the same
+# Helpers: deterministic mock so the same IOC always returns the same
 # verdict (good for caching + reproducible demos).
 # ---------------------------------------------------------------------
 
@@ -163,7 +163,7 @@ class AbuseIPDBAdapter(EnrichmentAdapter):
 
 
 # ---------------------------------------------------------------------
-# Recorded Future (mock-only by default — RF API is paid + bespoke)
+# Recorded Future (mock-only by default; the RF API is paid and bespoke)
 # ---------------------------------------------------------------------
 class RecordedFutureAdapter(EnrichmentAdapter):
     name = "recordedfuture"
@@ -192,7 +192,7 @@ class RecordedFutureAdapter(EnrichmentAdapter):
 
 
 # ---------------------------------------------------------------------
-# Registered providers — append new ones here.
+# Registered providers. Append new ones here.
 # ---------------------------------------------------------------------
 ADAPTERS = [
     VirusTotalAdapter(),

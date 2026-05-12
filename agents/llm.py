@@ -89,7 +89,7 @@ def _sync_resp_hook(resp: httpx.Response) -> None:
     _emit_response(resp.status_code, text)
 
 
-# Async flavours -- httpx awaits these
+# Async flavours (httpx awaits these on the async client)
 async def _async_req_hook(req: httpx.Request) -> None:
     _strip_inplace(req)
 

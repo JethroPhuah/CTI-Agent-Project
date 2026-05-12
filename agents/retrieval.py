@@ -1,4 +1,4 @@
-"""Retrieval agent — ReACT loop over MCP tools.
+"""Retrieval agent: ReACT loop over MCP tools.
 
 Implementation note: rather than rolling our own ReACT parser, we use
 LangGraph's prebuilt `create_react_agent`, which already handles the

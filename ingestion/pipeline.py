@@ -43,7 +43,7 @@ def run(synthetic_fallback: bool = True) -> int:
     docs = ingest_feeds(cfg.rss_feed_list, max_per_feed=20)
 
     if not docs and synthetic_fallback:
-        log.warning("No live RSS docs — falling back to synthetic seed reports.")
+        log.warning("No live RSS docs, falling back to synthetic seed reports.")
         from scripts.generate_synthetic_reports import generate
         docs = generate()
 

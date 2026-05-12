@@ -44,7 +44,7 @@ STIX_TYPE_TO_LABEL = {
 
 
 def _safe(s: str) -> str:
-    """Cypher-safe edge type — relationship_type comes verbatim from STIX."""
+    """Cypher-safe edge type; relationship_type comes verbatim from STIX."""
     return s.replace("-", "_").upper()
 
 

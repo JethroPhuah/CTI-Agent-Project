@@ -1,43 +1,16 @@
-# CTI Agent — A Multi-Agent Threat Intelligence Platform
+# CTI Agent
 
-> A from-scratch, end-to-end **Agentic AI** system that automates a Cyber Threat Intelligence (CTI) analyst's daily workflow: report triage, threat-actor profiling, IOC enrichment, and cross-source correlation.
->
-> This is a **public, synthetic-data version** of a production-grade Agentic stack I built and operate at work. The architecture, prompting patterns, MCP server design, and validation loop mirror the real system; only the data sources, customer-specific connectors, and proprietary enrichments have been replaced with public or mocked equivalents so the project can ship as a portfolio piece.
+A multi agent platform that automates the routine half of a Cyber Threat Intelligence analyst's day. It triages new reports, profiles threat actors, enriches IOCs against external feeds, and correlates evidence across multiple data stores. Users chat with it the way they would a junior analyst, and every step the agents take is visible in a collapsible timeline below the answer.
 
----
+This repository is a public, synthetic data version of a production Agentic AI stack I built and run at work. The agent architecture, prompting patterns, MCP server design, and validation loop here are the same as production. The actual data sources, paid feeds, and customer specific connectors have been replaced with RSS feeds, MITRE ATT&CK, and deterministic mocks so the project can ship as a portfolio piece without leaking anything sensitive.
 
-## Why this project
+## What an analyst's flow looks like in the system
 
-CTI analysts spend hours every day on the same handful of tasks:
+Ask "What tools does APT41 use?" and the request walks through four agents.
 
-- Reading new threat reports as they land and pulling out the relevant tools / TTPs / IOCs
-- Correlating across reports to answer questions like *"What tools does APT41 use, and have they been observed in the last 90 days?"*
-- Enriching IOCs against VirusTotal / AbuseIPDB / Recorded Future before triage
-- Writing the final write-up in a consistent format
+The Orchestrator agent reads the question, decides the intent is a threat actor profile, and picks the tools it wants the next agent to call (`graph_query`, `vector_search`, `keyword_search`). The Retrieval agent runs a ReACT loop where it calls those tools one at a time, reads each result, and decides whether to call another. The Writer agent picks one of five curated prompt templates based on the orchestrator's plan and drafts a Markdown answer. The Validator agent checks the answer is grounded in the evidence; if it is not, the graph loops back to the Writer with feedback for one or two more tries.
 
-This system collapses that work into a chat interface backed by **four specialised agents** wired together with LangGraph, each tool-equipped through **MCP (Model Context Protocol) servers**. The user sees every step the agents take, can constrain which tools they're allowed to use, and gives a 👍 / 👎 on the answer to grow a feedback dataset for offline RLHF / DPO.
-
----
-
-## Demo
-
-```
-User: "What tools does APT41 use?"
-
-  → Orchestrator        decides intent=threat_actor_profile,
-                        routes to [graph_query, vector_search, keyword_search]
-  → Retrieval (ReACT)   calls graph_query("APT41", "uses")    → tools list
-                        calls vector_search("APT41 tools")    → 3 chunks
-                        calls keyword_search("APT41")          → 2 hits
-  → Writer              renders one-shot "threat_actor_profile" template
-                        with the gathered evidence
-  → Validator           checks answer is grounded in evidence  → valid
-  → User                receives Markdown profile, can 👍 / 👎
-```
-
-Every one of those steps is visible in a collapsible timeline beneath the chat bubble.
-
----
+Every tool call, every plan, every retry shows up in the UI underneath the chat bubble. After the answer renders, the user can click thumbs up or thumbs down, which writes a row to a Postgres feedback table keyed by run id. That table is the seed dataset for offline RLHF or DPO style training.
 
 ## Architecture
 
@@ -48,7 +21,7 @@ flowchart LR
 
     subgraph Agents [LangGraph StateGraph]
         ORCH[Orchestrator<br/>intent + plan] --> RET[Retrieval<br/>ReACT loop]
-        RET --> WRT[Writer<br/>one-shot templates]
+        RET --> WRT[Writer<br/>one shot templates]
         WRT --> VAL[Validator]
         VAL -.invalid + retries<max.-> WRT
     end
@@ -64,200 +37,305 @@ flowchart LR
     MCP1 --> Neo[(Neo4j<br/>STIX KG)]
     MCP1 --> PG[(Postgres<br/>IOC DB)]
 
-    MCP2 --> Tavily[Tavily / mock]
+    MCP2 --> Tavily[Tavily or mock]
     MCP3 --> VT[VirusTotal]
     MCP3 --> Abuse[AbuseIPDB]
     MCP3 --> RF[Recorded Future]
 
     API --> FB[(Postgres<br/>feedback + traces)]
-    FE -.👍/👎.-> FB
+    FE -.thumbs up/down.-> FB
 ```
 
-### The four agents
+The four agents communicate through a shared LangGraph state. Each node reads what the previous nodes wrote, contributes its own delta, and the orchestration framework merges everything together. The conditional edge from Validator back to Writer is the heart of the self correction loop; it only fires when validation fails and we have retries left.
 
-| Agent | Responsibility | Prompting | LLM control |
-|---|---|---|---|
-| **Orchestrator** | Classify intent, pick the writer template, decide which MCP tools the retrieval agent may use | One-shot JSON | `temperature=0`, strict schema |
-| **Retrieval** | Loop tool-calls over the MCP fleet to gather evidence | ReACT (function-calling) | `temperature=0`, max 5 tool calls |
-| **Writer** | Render the final answer from one of five curated one-shot templates | One-shot Markdown | `temperature=0.3` |
-| **Validator** | Decide if the answer is grounded in the evidence; if not, send Writer back to retry with feedback | One-shot JSON | `temperature=0`, ≤2 retries |
+The retrieval MCP server is the one that talks to all four knowledge stores. The search MCP server wraps Tavily for open web search. The enrichment MCP server exposes one tool per third party reputation service. Splitting them this way means a new tool category can be added by writing one new MCP server, without touching the others.
 
-### Knowledge stores
+## What the agents look like in code
 
-| Store | What it holds | Powers |
-|---|---|---|
-| **Milvus** | Sentence-transformer embeddings of chunked CTI reports + metadata | `vector_search` |
-| **Elasticsearch** | Full report text, BM25-indexed | `keyword_search` (CVE IDs, hashes) |
-| **Neo4j** | MITRE ATT&CK STIX bundle + ingested intel as a property graph | `graph_query` ("what tools does APT41 use?") |
-| **Postgres** | IOCs (IP, domain, hash, URL, CVE), agent run traces, feedback | `ioc_lookup`, history, RLHF dataset |
-
----
-
-## Capabilities mapped to "Agentic AI" requirements
-
-This is a quick reference of what's implemented and where it lives — useful for code-walkthroughs in interviews.
-
-### Multi-agent orchestration (LangGraph)
-`agents/graph.py` wires the four nodes into a `StateGraph` with a conditional edge from `validator` back to `writer` on failure. Each node returns a delta dict that's merged into shared state; `graph.astream(stream_mode="updates")` provides per-node events for the streaming UI.
-
-### Modular MCP tools
-`mcp_servers/{retrieval,search,enrichment}_mcp/server.py` — three FastMCP servers, **one per tool category**. Each uses a `ToolRegistry` so **adding a new tool is one decorator**:
+The Orchestrator runs first. Its job is to read the user's question and output a JSON plan that the rest of the graph follows.
 
 ```python
-@registry.register()
-def my_new_tool(arg1: str, arg2: int = 10) -> dict:
-    """Tool description shown to the agent."""
-    ...
+# agents/orchestrator.py (abridged)
+
+_VALID_TEMPLATES = {
+    "summary", "threat_actor_profile", "ioc_report",
+    "correlation", "general",
+}
+
+async def orchestrator_node(state):
+    prompt = load_prompt("orchestrator").format(
+        user_query=state["user_query"],
+        available_tools=", ".join(state["available_tools"]),
+        selected_tools=", ".join(state["selected_tools"]) or "ALL",
+    )
+    llm = get_llm(temperature=0.0)
+    resp = await llm.ainvoke([
+        SystemMessage(content=prompt),
+        HumanMessage(content=state["user_query"]),
+    ])
+    plan = _parse_json(resp.content)
+
+    # Safety net: fall back to general if the model hallucinates a name.
+    if plan.get("writer_template") not in _VALID_TEMPLATES:
+        plan["writer_template"] = "general"
+
+    # User's tool selection from the UI sidebar always wins.
+    if state["selected_tools"]:
+        plan["tools_to_use"] = [
+            t for t in plan.get("tools_to_use", [])
+            if t in state["selected_tools"]
+        ]
+
+    return {"plan": plan, "trace": trace}
 ```
 
-For the enrichment server it's even cleaner — add a new `EnrichmentAdapter` subclass and the tool function is auto-generated:
+The Retrieval agent gets the plan and runs a ReACT loop against the MCP toolset. It uses `langgraph.prebuilt.create_react_agent`, which handles the Thought / Action / Observation cycle through the OpenAI function calling interface. The system prompt is heavily directive about always invoking at least one tool, since local LLMs sometimes try to answer from general knowledge.
+
+```python
+# agents/retrieval.py (abridged)
+
+async def retrieval_node(state):
+    all_tools = await load_all_tools()                # MCP discovery
+    tools = filter_tools(all_tools, state["plan"]["tools_to_use"])
+
+    system_prompt = load_prompt("retrieval_react").format(
+        user_query=state["user_query"],
+        plan=json.dumps(state["plan"]),
+    )
+    react_agent = create_react_agent(get_llm(0.0), tools, prompt=system_prompt)
+
+    result = await react_agent.ainvoke(
+        {"messages": [HumanMessage(content=state["user_query"])]},
+        config={"recursion_limit": 12},
+    )
+    evidence = _evidence_from_messages(result["messages"])
+    return {"evidence": evidence, "trace": trace}
+```
+
+The Writer takes the orchestrator's plan, looks up which template to use, and renders the answer.
+
+```python
+# agents/writer.py (abridged)
+
+_TEMPLATE_MAP = {
+    "summary":              "writer_summary",
+    "threat_actor_profile": "writer_threat_actor",
+    "ioc_report":           "writer_ioc_report",
+    "correlation":          "writer_correlation",
+    "general":              "writer_general",
+}
+
+async def writer_node(state):
+    template_name = _TEMPLATE_MAP.get(
+        state["plan"].get("writer_template", "general"),
+        "writer_general",
+    )
+    prompt = load_prompt(template_name).format(
+        user_query=state["user_query"],
+        evidence=_format_evidence(state.get("evidence")),
+    )
+    if feedback := state.get("validation", {}).get("feedback"):
+        prompt += f"\n\nThe previous attempt failed validation. Fix this: {feedback}"
+
+    resp = await get_llm(0.3).ainvoke([
+        SystemMessage(content=prompt),
+        HumanMessage(content=state["user_query"]),
+    ])
+    return {"answer": resp.content, "trace": trace}
+```
+
+The Validator returns a small JSON verdict that the graph uses to decide whether to retry.
+
+```python
+# agents/validator.py (abridged)
+
+async def validator_node(state):
+    prompt = load_prompt("validator").format(
+        user_query=state["user_query"],
+        evidence=_format_evidence(state.get("evidence")),
+        answer=state.get("answer", ""),
+    )
+    resp = await get_llm(0.0).ainvoke([SystemMessage(content=prompt), HumanMessage(content=state["user_query"])])
+    verdict = _parse_json(resp.content)  # {"valid": bool, "issues": [...], "feedback": "..."}
+    return {
+        "validation": verdict,
+        "retry_count": state.get("retry_count", 0) + (0 if verdict["valid"] else 1),
+        "trace": trace,
+    }
+```
+
+And the graph that wires them together. The conditional edge from Validator is the only branching point.
+
+```python
+# agents/graph.py (abridged)
+
+def build_graph():
+    g = StateGraph(CTIState)
+    g.add_node("orchestrator", orchestrator_node)
+    g.add_node("retrieval",    retrieval_node)
+    g.add_node("writer",       writer_node)
+    g.add_node("validator",    validator_node)
+
+    g.add_edge(START,           "orchestrator")
+    g.add_edge("orchestrator",  "retrieval")
+    g.add_edge("retrieval",     "writer")
+    g.add_edge("writer",        "validator")
+    g.add_conditional_edges("validator", _route_after_validator, {
+        "writer": "writer", END: END,
+    })
+    return g.compile()
+```
+
+## How the orchestrator picks the right writer template
+
+This trips people up the first time they read the code, so it's worth spelling out. The five prompt templates in `agents/prompts/writer_*.txt` each have a different output shape. A summary template just gives a tight summary of one report. A threat actor profile uses MITRE style sections (Aliases, Origin, TTPs, Tooling, Recent activity). An IOC report has a verdict line and a comparison table. The choice of template controls the whole shape of the final answer.
+
+The orchestrator is the one that decides which to use. Its prompt lists the five valid template names and shows a worked one shot example, so the model classifies the user's intent into one of those five buckets and returns it as the `writer_template` field of its JSON plan. The orchestrator code then validates that value against a whitelist (`_VALID_TEMPLATES`) and falls back to `general` if the model returned something we do not recognise. The Writer reads `state["plan"]["writer_template"]`, looks the string up in `_TEMPLATE_MAP`, and loads the corresponding `.txt` file from `agents/prompts/`.
+
+To add a sixth template, say `vulnerability_brief`, you create `agents/prompts/writer_vulnerability_brief.txt` with a one shot example, add `"vulnerability_brief": "writer_vulnerability_brief"` to `_TEMPLATE_MAP` in `writer.py`, add `vulnerability_brief` to `_VALID_TEMPLATES` in `orchestrator.py`, and append the new value to the pipe separated list in `agents/prompts/orchestrator.txt`. Rebuild the api container and the new template is live.
+
+## How the MCP server design lets you bolt on new tools
+
+The cleanest demonstration of the modularity is in the enrichment server. To add a new reputation provider (say GreyNoise), you add one class to `mcp_servers/enrichment_mcp/adapters.py`:
 
 ```python
 class GreyNoiseAdapter(EnrichmentAdapter):
     name = "greynoise"
-    def available(self): return bool(os.getenv("GREYNOISE_API_KEY"))
-    def enrich(self, value, ioc_type): ...
 
-ADAPTERS.append(GreyNoiseAdapter())   # done -- tool auto-registers
+    def __init__(self):
+        self.api_key = os.getenv("GREYNOISE_API_KEY", "")
+
+    def available(self):
+        return bool(self.api_key)
+
+    def enrich(self, value, ioc_type):
+        if not self.available():
+            return _mock_response("greynoise", value, ioc_type, classification="benign")
+        with httpx.Client() as c:
+            r = c.get(f"https://api.greynoise.io/v3/community/{value}",
+                      headers={"key": self.api_key})
+            return r.json()
+
+ADAPTERS.append(GreyNoiseAdapter())
 ```
 
-The agent rediscovers tools on every run, so no restart is needed.
+The enrichment MCP server already iterates over `ADAPTERS` to register one tool per provider, so a tool called `greynoise_lookup` is automatically exposed. No changes to the agent code, no MCP server restart logic to write. The retrieval agent rediscovers tools on every run, so it picks up the new one immediately.
 
-### Prompt techniques
+The retrieval MCP server uses the same pattern. To add a new retrieval source, drop a function decorated with `@registry.register()` into `mcp_servers/retrieval_mcp/server.py`:
 
-| Technique | Where | Why |
-|---|---|---|
-| **ReACT** (function-calling) | `prompts/retrieval_react.txt` | Drives the Retrieval agent's tool-use loop |
-| **One-shot** | All Writer / Orchestrator / Validator templates | Pins the output structure (JSON shape or Markdown sections) for a local LLM |
-
-Five curated Writer templates — `summary`, `threat_actor_profile`, `ioc_report`, `correlation`, `general` — each with a worked input/output example. The Orchestrator picks one per query.
-
-### Validation loop
-The Validator returns `{valid, issues, feedback}`. On `valid=false`, the LangGraph conditional edge routes back to the Writer, **passing the validator's feedback into the prompt** so the second attempt is targeted, not random.
-
-### Human-in-the-loop feedback
-- Each completed run gets a `run_id`.
-- 👍 / 👎 buttons in the UI `POST /feedback` with the run id and rating.
-- Storage schema in `databases/postgres/init.sql`:
-
-```sql
-agent_runs (id, user_query, selected_tools, final_answer, steps JSONB, ...)
-feedback   (id, run_id, rating IN (-1, 1), comment, user_email, created_at)
+```python
+@registry.register()
+def shodan_lookup(ip: str, top_k: int = 10) -> list:
+    """Look up an IP in Shodan and return ports, services, banners."""
+    return shodan_client.host(ip)
 ```
 
-The `steps JSONB` column stores the full agent trace, so the feedback dataset has not just the final answer but every reasoning step — usable directly for offline DPO / RLHF training.
+That's it. The tool appears in the orchestrator's `available_tools` list on the next request, and the UI sidebar grows a new checkbox for it.
 
-### Tool selection by the user
-The UI has a sidebar showing every discovered MCP tool, grouped by category, each with a checkbox. The user's selection is sent with the query and **intersected with the orchestrator's plan** in `agents/orchestrator.py` — so the user always wins. This lets analysts run queries in "internal-only" mode (no Tavily, no VT) for sensitive cases.
+## Knowledge stores
 
-### Step-level transparency
-Each agent records `TraceEvent`s into shared state. The API streams them over Server-Sent Events; the UI renders a collapsible timeline below each answer:
+Four stores power the retrieval side.
 
-```
-✓ Orchestrator   intent=threat_actor_profile, rationale="..."
-✓ Retrieval      action: graph_query → 5 records
-                 action: vector_search → 3 chunks
-✓ Writer         template=threat_actor_profile, 1.8s, preview "..."
-✓ Validator      ✓ Validated
-```
+Milvus holds sentence transformer embeddings of chunked CTI report text plus metadata (source, URL, threat actors, malware mentioned, published date). The `vector_search` tool runs an HNSW search there. Chunking is done with a token aware sentence splitter that preserves paragraph boundaries and adds overlap between chunks.
 
----
+Elasticsearch holds the same documents in their full form, BM25 indexed. The `keyword_search` tool hits this when the agent needs exact match retrieval, like a CVE id, hash, or specific tool name. Semantic similarity is bad at exact tokens; BM25 is good at them.
+
+Neo4j holds a STIX 2.1 knowledge graph populated from the MITRE ATT&CK enterprise bundle. Threat actors, malware, tools, attack patterns, vulnerabilities, and the relationships between them. The `graph_query` tool answers structural questions like "what tools does APT41 use" with a Cypher query.
+
+Postgres holds the IOC database (IP, domain, hash, URL, CVE rows with confidence, tags, first seen, last seen) and two more tables: `agent_runs` records every full run with its trace, and `feedback` records every thumbs up or thumbs down keyed to the corresponding run id. The `ioc_lookup` tool reads from `iocs`. The API writes to `agent_runs` and `feedback`.
+
+## Prompt techniques used
+
+Two techniques, in different places.
+
+**ReACT** drives the Retrieval agent. The model alternates between reasoning, calling a tool, and observing the result. We use the OpenAI function calling flavour of ReACT, not the text parsing flavour, because Qwen3 follows the function calling spec more reliably and we get tool call observability for free from the LangChain message log. The system prompt in `agents/prompts/retrieval_react.txt` is explicit about using the function call mechanism and mandates at least one tool call before responding.
+
+**One shot prompting** is used everywhere structure matters. The orchestrator prompt has a worked example showing the exact JSON shape we want. Each of the five Writer templates has a worked input output pair showing the section structure of that template. The Validator has a worked example showing the JSON verdict shape. The point of one shot here is not to teach the model the domain (it knows the domain) but to pin the output structure so downstream code can parse it deterministically. With a local LLM and no fine tuning, this matters a lot more than it does with GPT-4.
 
 ## Tech stack
 
-**Backend:** Python 3.11, FastAPI, sse-starlette, Pydantic v2, LangChain ≥0.3.18, LangGraph ≥0.2.50
-**MCP:** `mcp` Python SDK (FastMCP, SSE transport) — *no `langchain-mcp-adapters`*, replaced with a 70-line direct bridge for cross-version stability (see [Production lessons](#production-lessons))
-**LLM:** vLLM serving Qwen3 over an OpenAI-compatible endpoint (any compatible local server works — vLLM, Ollama, TGI)
-**Embeddings:** `sentence-transformers/multi-qa-mpnet-base-dot-v1`
-**Databases:** Milvus 2.4, Elasticsearch 8, Neo4j 5 (+APOC), Postgres 16
-**Frontend:** Next.js 14 (App Router), React 18, Tailwind CSS, lucide-react
-**Infra:** Docker Compose (single-command stack), no external dependencies required
+Backend is Python 3.11, FastAPI with `sse-starlette` for streaming, Pydantic v2 for validation, LangChain 0.3 and LangGraph 0.2 for the agent layer. The MCP servers run on the `mcp` Python SDK with FastMCP and SSE transport. The agent's bridge to MCP is a 70 line direct adapter (`agents/tools/mcp_loader.py`) that builds LangChain `StructuredTool` instances from MCP tool descriptors, with a Pydantic args schema built dynamically from the MCP JSON Schema. We deliberately do not depend on `langchain-mcp-adapters` because its langchain-core lower bound drifts and breaks the install every few weeks.
 
----
+The LLM is local. The default is Qwen3 served by vLLM over its OpenAI compatible API. Any vLLM, Ollama, or TGI endpoint that speaks the same protocol works. The wrapper in `agents/llm.py` strips a few request body fields that strict vLLM builds reject (more on this below).
+
+Embeddings come from `sentence-transformers/multi-qa-mpnet-base-dot-v1`. Databases are Milvus 2.4, Elasticsearch 8, Neo4j 5 with the APOC plugin, and Postgres 16. Frontend is Next.js 14 with the App Router, React 18, Tailwind CSS, and lucide-react. Everything ships in a single docker-compose file with no external service dependencies.
 
 ## Repository layout
 
 ```
 cti-agent/
-├── docker-compose.yml          # one-shot stack: 4 DBs + 3 MCPs + API + UI
-├── .env.example                # all configuration
-├── agents/                     # LangGraph multi-agent system
-│   ├── orchestrator.py
-│   ├── retrieval.py            # ReACT loop
-│   ├── writer.py               # one-shot templates
-│   ├── validator.py
-│   ├── graph.py                # StateGraph wiring + conditional retry edge
-│   ├── prompts/                # 8 prompt templates
-│   ├── tools/mcp_loader.py     # direct MCP→LangChain bridge (70 lines)
-│   ├── llm.py                  # vLLM-tolerant ChatOpenAI factory
-│   ├── state.py
-│   └── config.py
-├── ingestion/                  # RAG pipeline
-│   ├── rss_ingestor.py         # The Hacker News, Bleeping, Krebs, ...
-│   ├── chunker.py              # token-aware sentence chunking + overlap
-│   ├── extractors.py           # regex IOC + actor/malware dictionaries
-│   ├── embedder.py
-│   ├── writers.py              # Milvus + Elasticsearch
-│   └── pipeline.py             # end-to-end runner
-├── databases/
-│   ├── milvus/client.py
-│   ├── elasticsearch/client.py
-│   ├── neo4j/
-│   │   ├── stix_loader.py      # MITRE ATT&CK → Neo4j
-│   │   ├── queries.py          # Cypher helpers
-│   │   └── schema.cypher
-│   └── postgres/
-│       ├── init.sql            # iocs + agent_runs + feedback schemas
-│       └── client.py
-├── mcp_servers/                # one server per tool category
-│   ├── retrieval_mcp/          # vector_search, keyword_search, graph_query, ioc_lookup
-│   ├── search_mcp/             # tavily_search (hybrid live/mock)
-│   └── enrichment_mcp/         # VT, AbuseIPDB, Recorded Future (hybrid)
-├── api/main.py                 # FastAPI + SSE streaming
-├── frontend/                   # Next.js chatbot
-│   ├── app/page.tsx            # chat layout + tool sidebar + step timeline
-│   ├── components/             # AgentTimeline, ToolSelector, FeedbackButtons, ...
-│   └── lib/api.ts              # SSE client (CRLF-safe, robust JSON parsing)
-└── scripts/
-    └── generate_synthetic_reports.py
+  docker-compose.yml          one shot stack: 4 DBs + 3 MCPs + API + UI
+  .env.example                all configuration
+  agents/                     LangGraph multi agent system
+    orchestrator.py
+    retrieval.py              ReACT loop
+    writer.py                 one shot templates
+    validator.py
+    graph.py                  StateGraph wiring + conditional retry edge
+    prompts/                  8 prompt templates
+    tools/mcp_loader.py       direct MCP to LangChain bridge (70 lines)
+    llm.py                    vLLM tolerant ChatOpenAI factory
+    state.py
+    config.py
+  ingestion/                  RAG pipeline
+    rss_ingestor.py           The Hacker News, Bleeping, Krebs
+    chunker.py                token aware sentence chunking + overlap
+    extractors.py             regex IOC + actor/malware dictionaries
+    embedder.py
+    writers.py                Milvus + Elasticsearch
+    pipeline.py               end to end runner
+  databases/
+    milvus/client.py
+    elasticsearch/client.py
+    neo4j/
+      stix_loader.py          MITRE ATT&CK to Neo4j
+      queries.py              Cypher helpers
+      schema.cypher
+    postgres/
+      init.sql                iocs + agent_runs + feedback schemas
+      client.py
+  mcp_servers/                one server per tool category
+    retrieval_mcp/            vector_search, keyword_search, graph_query, ioc_lookup
+    search_mcp/               tavily_search (hybrid live/mock)
+    enrichment_mcp/           VT, AbuseIPDB, Recorded Future (hybrid)
+  api/main.py                 FastAPI + SSE streaming
+  frontend/                   Next.js chatbot
+    app/page.tsx
+    components/
+    lib/api.ts                SSE client
+  scripts/
+    generate_synthetic_reports.py
 ```
-
----
 
 ## Quick start
 
-### Prerequisites
-- Docker Desktop (Windows / Mac / Linux)
-- A reachable vLLM-style OpenAI-compatible endpoint serving any Qwen / Mistral / Llama chat model. The default config assumes vLLM on the host machine.
+Prereqs are Docker Desktop and an OpenAI compatible LLM endpoint reachable from your Docker network. vLLM on the host machine is the assumed default.
 
-### 1. Configure
+Copy the example env file and point it at your LLM.
+
 ```bash
 cp .env.example .env
-# Edit LLM_BASE_URL (point at your vLLM endpoint) and LLM_MODEL.
-# Optional: set TAVILY_API_KEY / VIRUSTOTAL_API_KEY / ABUSEIPDB_API_KEY
-# to enable live mode; otherwise the system falls back to deterministic
-# mocks so the demo always works.
+# edit LLM_BASE_URL and LLM_MODEL
+# optional: set TAVILY_API_KEY, VIRUSTOTAL_API_KEY, ABUSEIPDB_API_KEY for live mode
 ```
 
-### 2. Bring up the stack
+Bring up the stack.
+
 ```bash
 docker compose up -d
 ```
-Brings up Milvus, Elasticsearch, Neo4j, Postgres, three MCP servers, the FastAPI backend, and the Next.js UI on `http://localhost:3000`.
 
-### 3. Seed the knowledge stores
+That starts Milvus, Elasticsearch, Neo4j, Postgres, the three MCP servers, the FastAPI backend, and the Next.js UI. The UI is at `http://localhost:3000`.
+
+Seed the knowledge stores. The first command embeds RSS articles into Milvus and Elasticsearch (falls back to synthetic CTI reports if RSS is unreachable). The second command pulls MITRE ATT&CK and loads it into Neo4j.
+
 ```bash
-# Embed RSS-pulled CTI reports into Milvus + Elasticsearch
 docker compose exec api python -m ingestion.pipeline
-
-# Load MITRE ATT&CK STIX bundle into Neo4j
 docker compose exec api python -m databases.neo4j.stix_loader
 ```
 
-### 4. Use it
-Open `http://localhost:3000`, type a query, watch the agent timeline.
+A few queries to try once everything is running:
 
-### Suggested first queries
 ```
 What tools does APT41 use?
 Summarize the latest LockBit campaign
@@ -266,89 +344,44 @@ Are FIN7 and LockBit connected?
 Give me an IOC report on CVE-2024-3400
 ```
 
----
-
 ## Production lessons
 
-A non-trivial portion of the work was getting a local-LLM agentic stack to behave reliably on real infrastructure. These were the harder, less-Googleable issues I worked through — keeping them visible here because they're representative of the kind of debugging Agentic AI engineering involves.
+Most of the time spent on this project went into getting a local LLM stack to behave reliably. The standard tutorials assume you are using OpenAI, where most of these issues do not exist. Worth listing because the debugging is representative of real Agentic AI engineering work.
 
-| Problem | Root cause | Fix in this repo |
-|---|---|---|
-| vLLM 400 on every chat call | `langchain-openai` attaches `stream_options={"include_usage": True}` to *non-streaming* calls; strict vLLM builds reject it | httpx request hook in `agents/llm.py` strips `stream_options` / `parallel_tool_calls` / redundant `n=1` from every outgoing body before it hits the wire |
-| `"No user query found in messages."` | vLLM/Qwen3 chat templates require a `user` turn; LangChain agents were sending `SystemMessage`-only payloads | Every agent node now sends `[SystemMessage, HumanMessage]` |
-| `langchain-mcp-adapters` version churn | The library's `langchain-core` lower bound drifts weekly; pinning either side breaks the other | Replaced with a 70-line direct MCP→LangChain bridge (`agents/tools/mcp_loader.py`) — only depends on `mcp` (already required) and `pydantic` |
-| FastMCP `issubclass(annotation, Context)` crashes on tool registration | `from __future__ import annotations` turns tool param types into strings; old FastMCP versions can't handle non-class annotations | Removed `__future__ annotations` from all MCP server modules, used bare-class param types only, added monkey-patch fallback |
-| Retrieval agent skipped tool calls entirely | Prompt mixed text-based ReACT (`Thought: ... Action: ...`) with the tool-calling interface, confusing Qwen3 | Rewrote `retrieval_react.txt` to drop text-format instructions and explicitly mandate function-call usage |
+vLLM rejected every chat call with HTTP 400 until I figured out that `langchain-openai` attaches `stream_options={"include_usage": True}` to non streaming requests, and stricter vLLM builds refuse to accept it. The fix in `agents/llm.py` is an httpx request hook that strips that field (plus `parallel_tool_calls` and redundant `n=1`) from every outgoing body before it goes on the wire. Works across every patch version of langchain-openai because the strip happens at the HTTP layer.
 
-A more verbose version of each problem and its fix lives in [`docs/PROMPTS.md`](docs/PROMPTS.md) and inline code comments. The `httpx` body-stripper alone has paid for itself across three different vLLM versions.
+vLLM also refused requests with no user turn, returning "No user query found in messages." The standard LangChain pattern of putting everything into a single `SystemMessage` does not work. Every agent node now sends `[SystemMessage(prompt), HumanMessage(user_query)]` to satisfy the Qwen3 chat template.
 
----
+`langchain-mcp-adapters` was a constant source of dependency churn. The library's lower bound on `langchain-core` moved upward every few releases, and pinning either side broke installs. The fix was to remove the dependency entirely and write the bridge ourselves in 70 lines using only the `mcp` SDK and `pydantic.create_model`. This also fixed a bug in the 0.0.x line where `get_tools()` silently returned an empty list outside an `async with` block.
 
-## Extending the system
+FastMCP crashes during tool registration when it sees subscripted type annotations like `Optional[str]` or anything left as a string by `from __future__ import annotations`. The fix is to remove `from __future__ import annotations` from MCP server files and stick to bare class annotations in tool signatures.
 
-### Add a new retrieval source
-Drop a function into `mcp_servers/retrieval_mcp/server.py`:
+Milvus 2.4's expression parser rejects `LIKE` filters with leading wildcards (`failed to create query plan`). I pulled the threat actor filter out of Milvus and do it as a soft post filter in Python instead. The embedding ranking already pulls the relevant chunks to the top, so the post filter is more of a tiebreaker than a hard constraint.
 
-```python
-@registry.register()
-def shodan_lookup(ip: str, top_k: int = 10) -> list:
-    """Look up an IP in Shodan."""
-    return shodan_client.host(ip)
-```
+The retrieval agent initially skipped all tool calls and answered from general knowledge. The cause was a prompt that mixed text format ReACT instructions (Thought / Action / Observation) with the OpenAI function calling interface. Qwen3 looked at the conflicting instructions and just generated a text response. Rewriting the prompt to drop the text format and explicitly mandate function calls fixed it.
 
-The retrieval MCP server auto-registers it. The agent discovers it on the next run.
-
-### Add a new enrichment provider
-Add an adapter class in `mcp_servers/enrichment_mcp/adapters.py`:
-
-```python
-class GreyNoiseAdapter(EnrichmentAdapter):
-    name = "greynoise"
-    def available(self): return bool(os.getenv("GREYNOISE_API_KEY"))
-    def enrich(self, value, ioc_type): ...
-
-ADAPTERS.append(GreyNoiseAdapter())
-```
-
-Tool function (`greynoise_lookup`) is auto-generated. UI sidebar picks it up.
-
-### Add a new Writer template
-1. Create `agents/prompts/writer_<your_template>.txt` with a one-shot example.
-2. Register it in `_TEMPLATE_MAP` in `agents/writer.py`.
-3. Mention the new `writer_template` value in `agents/prompts/orchestrator.txt` so the routing model knows about it.
-
----
+The `httpx` body stripper alone has paid for itself across three different vLLM versions. None of these issues are findable through search; you find them by reading the actual request bodies, response bodies, and stack traces and working backward.
 
 ## Roadmap
 
-| Item | Why |
-|---|---|
-| **Caching layer** | Identical IOC lookups hit external APIs every time. A small Redis (or Postgres-backed) cache in front of `enrichment_mcp` would cut latency from ~1s to single-digit ms on hot indicators and save quota. Same idea for `vector_search` results within a session. |
-| **Background ingestion worker** | Right now ingestion is run manually. A `cron` container (or Airflow / k8s CronJob in production) would pull RSS hourly and STIX/TAXII feeds daily. |
-| **LangSmith / OpenTelemetry tracing** | The hook is already in `.env` (`LANGSMITH_TRACING=true`) — needs the observability dashboard. |
-| **Authentication** | Currently single-tenant. SSO + per-user RBAC for which tools are usable. |
-| **DPO training loop** | The `agent_runs` + `feedback` tables already form a DPO-ready pair dataset. A scheduled fine-tuning job that emits a new Qwen adapter weekly would close the loop. |
-| **Threat-actor entity disambiguation** | "APT41" vs "Wicked Panda" vs "Barium" should all resolve to the same node; right now the dictionary in `extractors.py` is flat. Fold this into Neo4j's `aliases` field. |
+Caching is the biggest gap. External enrichment API calls (VirusTotal, AbuseIPDB) are slow and rate limited; the same IOC gets looked up dozens of times across runs. A small Redis or Postgres backed cache in front of the enrichment MCP server would cut latency from around one second per call to single digit milliseconds on hot indicators, and keep the API quotas from getting hammered. Same idea but with shorter TTLs for `vector_search` results within a session.
 
----
+Background ingestion. Right now seeding is manual. A cron container, or an Airflow DAG, or a Kubernetes CronJob in a production deployment would pull RSS feeds hourly and STIX/TAXII feeds daily. The ingestion pipeline is idempotent on RSS items thanks to URL based hashing, so re-running it is safe.
 
-## Honest scope notes
+Tracing. The LangSmith env var is already wired into `.env`. Turning it on and standing up an observability dashboard is mostly configuration.
 
-To set expectations for reviewers:
+Authentication. Currently single tenant. SSO and per user RBAC controlling which tools each analyst can use would be a real production requirement.
 
-- **The CTI reports are public RSS feeds + synthetic data.** The real production system ingests from paid feeds, internal sensors, and customer-specific sources I can't share.
-- **The IOC database is seeded with ~10 demo indicators.** Production has tens of thousands continually backfilled from threat-intel feeds.
-- **The STIX KG is MITRE ATT&CK only.** Production also includes custom intrusion-set / campaign nodes our analysts maintain.
-- **External enrichment APIs run in mock mode by default.** Set the relevant `*_API_KEY` env var to hit the real provider.
-- **The frontend is intentionally minimal.** It's good enough to show every agentic capability cleanly; it's not a polished SOC console.
+DPO training. The `agent_runs` and `feedback` tables already form a DPO ready pair dataset (winning answer = thumbs up, losing answer = thumbs down on the same query). A scheduled fine tuning job emitting a new Qwen adapter weekly is the obvious next move once we have enough labelled traffic.
 
-The architecture, agent design, MCP server pattern, prompt techniques, validation loop, and HITL feedback storage are **the same** as the production system — just with the customer-specific bits stripped out.
+Threat actor entity disambiguation. The dictionary in `extractors.py` treats "APT41" and "Wicked Panda" as separate strings. They should resolve to the same Neo4j node via the `aliases` field on the STIX intrusion set. The KG already has the data; the extractor needs to consult it.
 
----
+## Scope notes
+
+The CTI reports are public RSS feeds plus a small synthetic seed set. Production ingests from paid threat intel feeds, internal sensors, and customer specific sources that cannot be shared. The IOC database here has about ten demo indicators; production has tens of thousands continually backfilled. The STIX knowledge graph is MITRE ATT&CK only; production also has custom intrusion set and campaign nodes maintained by analysts. External enrichment defaults to mock mode; set the relevant API key env vars to hit real providers. The frontend is intentionally minimal, enough to demonstrate every agentic capability cleanly but not a polished SOC console.
+
+The agent architecture, MCP server design, prompt techniques, validation loop, and human in the loop feedback storage match production exactly. Only the data is different.
 
 ## Acknowledgements
 
-- MITRE ATT&CK STIX bundle (CC BY 4.0)
-- `iocextract` for IOC regex patterns
-- The MCP working group for the Model Context Protocol spec
-- Inspired by — and built to replace — an in-house non-agentic CTI bot
+MITRE ATT&CK STIX bundle (CC BY 4.0). `iocextract` for IOC regex patterns. The MCP working group for the protocol spec. The system replaces an earlier non agentic CTI bot we built in house, which is what motivated the move to a proper Agentic architecture.

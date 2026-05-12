@@ -1,9 +1,18 @@
-"""Thin Milvus client used by the retrieval MCP server."""
-from __future__ import annotations
+"""Thin Milvus client used by the retrieval MCP server.
 
+Note on filtering: we deliberately do NOT push threat_actor filters
+down to Milvus. Milvus 2.4's expression parser rejects leading-wildcard
+`LIKE` patterns ("failed to create query plan") and the field stores
+threat_actors as a JSON-encoded list, which makes server-side filtering
+brittle across Milvus versions.
+
+Instead we over-fetch and post-filter in Python. The embedding ranking
+already pulls threat-actor-relevant chunks to the top, so post-filtering
+only acts as a soft re-rank when the agent passes a specific actor name.
+"""
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from pymilvus import Collection, connections
 
@@ -21,29 +30,29 @@ class MilvusClient:
         query_vector: List[float],
         *,
         top_k: int = 5,
-        threat_actor: str | None = None,
+        threat_actor: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        expr = None
-        if threat_actor:
-            expr = f'threat_actors like "%{threat_actor}%"'
+        # Over-fetch when a soft filter is requested, then trim after
+        # post-filtering. Keep the upper bound modest to stay snappy.
+        limit = top_k * 4 if threat_actor else top_k
+        limit = min(limit, 50)
 
         results = self.collection.search(
             data=[query_vector],
             anns_field="embedding",
             param={"metric_type": "IP", "params": {"ef": 64}},
-            limit=top_k,
-            expr=expr,
+            limit=limit,
             output_fields=[
                 "chunk_id", "doc_id", "source", "url", "title",
                 "published_at", "threat_actors", "malware", "text",
             ],
         )
 
-        out = []
+        out: List[Dict[str, Any]] = []
         for hits in results:
             for hit in hits:
                 e = hit.entity
-                out.append({
+                row = {
                     "chunk_id": e.get("chunk_id"),
                     "doc_id": e.get("doc_id"),
                     "score": float(hit.score),
@@ -54,7 +63,23 @@ class MilvusClient:
                     "threat_actors": _safe_json(e.get("threat_actors")),
                     "malware": _safe_json(e.get("malware")),
                     "text": e.get("text"),
-                })
+                }
+                out.append(row)
+
+        if threat_actor:
+            needle = threat_actor.lower()
+            preferred = [
+                r for r in out
+                if any(needle in a.lower() for a in r.get("threat_actors", []))
+                or needle in (r.get("text") or "").lower()
+                or needle in (r.get("title") or "").lower()
+            ]
+            # Keep matched rows first, then fill with the rest until top_k.
+            rest = [r for r in out if r not in preferred]
+            out = (preferred + rest)[:top_k]
+        else:
+            out = out[:top_k]
+
         return out
 
 

@@ -2,7 +2,7 @@ You are the Validator agent. Your job is to decide whether the writer's
 answer actually addresses the user's query and is grounded in the
 evidence.
 
-## Output format — JSON ONLY
+## Output format (JSON ONLY)
 
 ```json
 {{

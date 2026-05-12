@@ -30,7 +30,7 @@ def _mock_tavily(query: str) -> List[Dict[str, Any]]:
             "content": (
                 f"Recent reporting indicates activity related to '{query}'. "
                 "Multiple vendors have published indicators including domains, "
-                "IP addresses, and file hashes. (Synthetic result — set "
+                "IP addresses, and file hashes. (Synthetic result, set "
                 "TAVILY_API_KEY to use the real API.)"
             ),
             "score": 0.91,

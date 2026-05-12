@@ -3,7 +3,7 @@
 This project uses **two** prompt techniques, deliberately, in different
 places. This file gives a quick map.
 
-## ReACT — Retrieval agent
+## ReACT: Retrieval agent
 
 File: `agents/prompts/retrieval_react.txt`
 
@@ -13,7 +13,7 @@ We rely on `langgraph.prebuilt.create_react_agent` to drive it. The
 prompt's one-shot example walks through an IOC lookup that hits three
 tools sequentially.
 
-## One-shot learning — everywhere structure matters
+## One-shot learning: everywhere structure matters
 
 Each of the following prompts contains exactly one fully-worked
 example so the LLM imitates the desired output structure:

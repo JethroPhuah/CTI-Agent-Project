@@ -1,13 +1,13 @@
 """Retrieval MCP server.
 
 Exposes four tools to the agent:
-  * vector_search   -- semantic search across CTI report chunks (Milvus)
-  * keyword_search  -- BM25 search across full reports (Elasticsearch)
-  * graph_query     -- STIX knowledge graph lookups (Neo4j)
-  * ioc_lookup      -- IOC database lookup (Postgres)
+  * vector_search  . semantic search across CTI report chunks (Milvus)
+  * keyword_search . BM25 search across full reports (Elasticsearch)
+  * graph_query    . STIX knowledge graph lookups (Neo4j)
+  * ioc_lookup     . IOC database lookup (Postgres)
 
 To add a new retrieval tool, just write another function and decorate
-it with `@registry.register()` -- it will be discovered automatically.
+it with `@registry.register()` and it will be discovered automatically.
 
 NOTE on type annotations: FastMCP introspects parameter annotations
 and (in some versions) does an `issubclass(annotation, Context)`
@@ -38,7 +38,7 @@ cfg = get_settings()
 mcp = FastMCP("cti-retrieval")
 registry = ToolRegistry()
 
-# Lazy clients -- instantiated on first call so the server boots even
+# Lazy clients (instantiated on first call so the server boots even
 # if a downstream DB is still warming up.
 _milvus: Optional[MilvusClient] = None
 _es: Optional[ESClient] = None
@@ -83,7 +83,7 @@ def _get_pg() -> PGClient:
 
 
 # ---------------------------------------------------------------------
-# Tools -- bare-class param annotations only
+# Tools (bare-class param annotations only)
 # ---------------------------------------------------------------------
 
 @registry.register()
@@ -130,10 +130,10 @@ def graph_query(
     """STIX knowledge graph lookup over MITRE ATT&CK + ingested intel.
 
     query_type:
-      * 'uses'         -- what tools/malware/techniques does this actor use?
-      * 'techniques'   -- ATT&CK techniques associated with this actor
-      * 'actors_using' -- which actors use this tool/malware?
-      * 'search'       -- fuzzy entity name search
+      * 'uses'        . what tools/malware/techniques does this actor use?
+      * 'techniques'  . ATT&CK techniques associated with this actor
+      * 'actors_using'. which actors use this tool/malware?
+      * 'search'      . fuzzy entity name search
     """
     log.info("graph_query entity=%r type=%s", entity_name, query_type)
     g = _get_neo4j()

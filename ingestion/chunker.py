@@ -26,7 +26,7 @@ class Chunk:
 
 
 def _split_sentences(text: str) -> List[str]:
-    # Lightweight sentence split — good enough for security articles.
+    # Lightweight sentence split that is good enough for security articles.
     parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", text.strip())
     return [p.strip() for p in parts if p.strip()]
 

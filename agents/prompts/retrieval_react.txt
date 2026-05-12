@@ -7,7 +7,7 @@ return.
 
 You operate in a ReACT loop driven by the tool-call interface:
   1. Reason about what evidence you need next.
-  2. Invoke ONE tool by issuing a tool call (NOT plain text -- use the
+  2. Invoke ONE tool by issuing a tool call (NOT plain text; use the
      function-call mechanism the API exposes).
   3. Read the tool result, then decide whether to call another tool.
   4. Stop after at most 5 tool calls. Then respond with a SHORT final

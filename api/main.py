@@ -1,11 +1,11 @@
 """FastAPI agent backend.
 
 Endpoints:
-  POST /chat         — SSE stream of agent steps + final answer
-  POST /feedback     — record thumbs up/down for a run_id
-  GET  /tools        — list MCP tools currently exposed (for UI toggles)
-  GET  /history      — recent runs
-  GET  /healthz      — liveness probe
+  POST /chat         : SSE stream of agent steps and the final answer
+  POST /feedback     : record thumbs up/down for a run_id
+  GET  /tools        : list MCP tools currently exposed (for UI toggles)
+  GET  /history      : recent runs
+  GET  /healthz      : liveness probe
 """
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ async def healthz() -> Dict[str, Any]:
 
 
 # ----------------------------------------------------------------------
-# /tools — let the UI know what tool toggles to render
+# /tools: report the tool toggles the UI should render
 # ----------------------------------------------------------------------
 
 @app.get("/tools")
@@ -86,7 +86,7 @@ async def list_tools() -> Dict[str, Any]:
         "enrichment": [],
         "other": [],
     }
-    # Heuristic categorisation by name prefix — works because each MCP
+    # Heuristic categorisation by name prefix; works because each MCP
     # server's tools have distinct names.
     for n in names:
         if n in {"vector_search", "keyword_search", "graph_query", "ioc_lookup"}:
@@ -101,7 +101,7 @@ async def list_tools() -> Dict[str, Any]:
 
 
 # ----------------------------------------------------------------------
-# /chat — SSE stream
+# /chat: SSE stream
 # ----------------------------------------------------------------------
 
 @app.post("/chat")
@@ -112,7 +112,10 @@ async def chat(req: ChatRequest):
     run_id = str(uuid.uuid4())
 
     try:
-        pg().create_run(req.query, req.selected_tools)
+        # Pass the generated run_id so the agent_runs row's id matches
+        # the one we will hand to the UI. Without this the foreign key
+        # in `feedback.run_id` cannot resolve when the user submits a vote.
+        pg().create_run(req.query, req.selected_tools, run_id=run_id)
     except Exception as e:  # noqa: BLE001
         log.warning("could not record run start: %s", e)
 

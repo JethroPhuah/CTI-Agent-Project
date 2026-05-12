@@ -7,7 +7,7 @@ the design choices are obvious to a reviewer.
 
 ### 1. Frontend (Next.js)
 - User types into `ChatInput`. The selected tool list (from
-  `ToolSelector`) is the user's "human-in-the-loop knob" — they can
+  `ToolSelector`) is the user's "human-in-the-loop knob"; they can
   disable, e.g., web search if they want a closed-source answer.
 - `streamChat()` posts to `/chat` and parses Server-Sent Events.
 
@@ -45,7 +45,7 @@ the design choices are obvious to a reviewer.
 
 ### 5. MCP servers
 Three FastMCP processes serving SSE on ports 8101 / 8102 / 8103.
-Each one uses a `ToolRegistry` so tools are functions — adding one is
+Each one uses a `ToolRegistry` so tools are functions, and adding one is
 one decorator.
 
 ```python

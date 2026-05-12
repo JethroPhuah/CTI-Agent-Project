@@ -9,7 +9,7 @@ from typing import Dict, List
 
 import iocextract
 
-# A small seed list of high-frequency threat actors. Extend as needed —
+# A small seed list of high-frequency threat actors. Extend as needed;
 # the LangGraph retrieval agent will fall back to the Neo4j KG for
 # anything not in this dictionary.
 _THREAT_ACTORS = {

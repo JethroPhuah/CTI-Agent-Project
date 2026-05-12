@@ -14,8 +14,8 @@ langchain-community>=0.3.18,<0.4
 # 0.4.x reorganised internals (langgraph._internal) and breaks
 # `from langgraph.prebuilt import create_react_agent`. Stay on 0.2.x.
 langgraph>=0.2.50,<0.3
-# langchain-mcp-adapters intentionally NOT used -- it's a moving
-# target whose internal langchain-core requirements drift weekly.
+# langchain-mcp-adapters intentionally NOT used; it is a moving
+# target whose langchain-core lower bound drifts weekly.
 # We bridge MCP tools to LangChain ourselves in agents/tools/mcp_loader.py
 # using only the mcp SDK (already pinned above) and pydantic.
 
@@ -39,8 +39,9 @@ pymilvus==2.4.9
 elasticsearch==8.11.0
 neo4j==5.26.0
 psycopg[binary,pool]==3.2.3
-# (SQLAlchemy not pinned -- pulled transitively by langchain-community
-#  with the version it actually supports; we never call it directly.)
+# (SQLAlchemy is not pinned; it gets pulled transitively by
+#  langchain-community at whatever version it actually supports.
+#  We never call SQLAlchemy directly.)
 
 # Embeddings
 sentence-transformers==3.3.1
@@ -64,7 +65,7 @@ iocextract==1.16.1
 # tavily-python is lazy-imported inside search_mcp; if you set
 # TAVILY_API_KEY but don't install this, the server falls back to mock.
 tavily-python==0.5.0
-# (VirusTotal: vt-py removed -- the adapter uses httpx directly.)
+# (vt-py was removed; the VirusTotal adapter uses httpx directly.)
 
 # Utilities
 python-dotenv==1.0.1

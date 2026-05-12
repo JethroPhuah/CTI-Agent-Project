@@ -1,4 +1,4 @@
-"""Prompt loader — reads .txt templates from this directory by name."""
+"""Prompt loader for the .txt templates in this directory."""
 from __future__ import annotations
 
 from functools import lru_cache

@@ -1,4 +1,4 @@
-"""Centralized config -- pulls from environment, falls back to safe defaults."""
+"""Centralized config. Pulls from environment with safe defaults."""
 from __future__ import annotations
 
 import os

@@ -1,4 +1,4 @@
-"""Synthetic CTI report generator — used as a deterministic seed when
+"""Synthetic CTI report generator used as a deterministic seed when
 RSS feeds are unreachable in the demo environment.
 
 Each report is realistic enough to exercise extractors (mentions IOCs,
@@ -49,7 +49,7 @@ _TEMPLATES = [
             "CISA and partner agencies confirmed Volt Typhoon, a PRC state-"
             "sponsored actor, has pre-positioned access in US critical "
             "infrastructure networks. The intrusion set favors living-off-the-"
-            "land binaries — netsh, wmic, ntdsutil — and a custom web shell. "
+            "land binaries (netsh, wmic, ntdsutil) and a custom web shell. "
             "Public-facing Fortinet appliances vulnerable to CVE-2022-42475 "
             "served as initial access. Domains observed: cdn-update[.]net, "
             "telemetry-sync[.]com. Recommended mitigations align with MITRE "

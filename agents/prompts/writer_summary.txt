@@ -9,7 +9,7 @@ Evidence:
 
 Output:
 
-**Summary — APT41 cloud campaign**
+**Summary: APT41 cloud campaign**
 
 APT41 conducted a targeted intrusion using ShadowPad and Cobalt Strike,
 gaining initial access through CVE-2023-3519 in unpatched Citrix

@@ -1,4 +1,4 @@
-"""Orchestrator agent -- classifies intent and produces a plan."""
+"""Orchestrator agent: classifies the user intent and produces a routing plan."""
 import json
 import logging
 import re

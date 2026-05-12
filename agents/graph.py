@@ -96,7 +96,7 @@ async def stream_query(
     selected_tools: List[str] | None = None,
     run_id: str = "",
 ) -> AsyncIterator[Dict[str, Any]]:
-    """Stream incremental state updates — used by the FastAPI SSE endpoint."""
+    """Stream incremental state updates for the FastAPI SSE endpoint."""
     graph = build_graph()
     available = await discover_tool_names()
     initial: CTIState = {

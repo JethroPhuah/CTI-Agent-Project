@@ -74,14 +74,32 @@ class PGClient:
     # ------------------------------------------------------------------
     # Agent runs
     # ------------------------------------------------------------------
-    def create_run(self, user_query: str, selected_tools: List[str]) -> str:
+    def create_run(
+        self,
+        user_query: str,
+        selected_tools: List[str],
+        run_id: Optional[str] = None,
+    ) -> str:
+        """Insert a new agent_runs row.
+
+        If `run_id` is supplied, the row uses that id (so the caller can
+        pre generate the uuid and emit it to the client before persisting).
+        Otherwise the row gets an auto generated uuid via gen_random_uuid().
+        """
         with self.conn() as c:
             with c.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO agent_runs (user_query, selected_tools) "
-                    "VALUES (%s, %s) RETURNING id",
-                    [user_query, selected_tools],
-                )
+                if run_id is not None:
+                    cur.execute(
+                        "INSERT INTO agent_runs (id, user_query, selected_tools) "
+                        "VALUES (%s, %s, %s) RETURNING id",
+                        [run_id, user_query, selected_tools],
+                    )
+                else:
+                    cur.execute(
+                        "INSERT INTO agent_runs (user_query, selected_tools) "
+                        "VALUES (%s, %s) RETURNING id",
+                        [user_query, selected_tools],
+                    )
                 return str(cur.fetchone()["id"])
 
     def append_step(self, run_id: str, step: Dict[str, Any]):

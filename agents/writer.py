@@ -1,5 +1,5 @@
-"""Writer agent -- selects a one-shot prompt template based on the
-orchestrator's plan and produces the final answer."""
+"""Writer agent: picks one of the one-shot prompt templates based on
+the orchestrator's plan and renders the final answer."""
 import json
 import logging
 from typing import Any, Dict
