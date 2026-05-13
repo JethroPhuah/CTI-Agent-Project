@@ -351,42 +351,16 @@ Give me an IOC report on CVE-2024-3400
 
 ## Production lessons
 
-Most of the time spent on this project went into getting a local LLM stack to behave reliably. The standard tutorials assume you are using OpenAI, where most of these issues do not exist. Worth listing because the debugging is representative of real Agentic AI engineering work.
+Most of the time spent on this project went into getting a local LLM stack to behave reliably.
 
 vLLM rejected every chat call with HTTP 400 until I figured out that `langchain-openai` attaches `stream_options={"include_usage": True}` to non streaming requests, and stricter vLLM builds refuse to accept it. The fix in `agents/llm.py` is an httpx request hook that strips that field (plus `parallel_tool_calls` and redundant `n=1`) from every outgoing body before it goes on the wire. Works across every patch version of langchain-openai because the strip happens at the HTTP layer.
 
 vLLM also refused requests with no user turn, returning "No user query found in messages." The standard LangChain pattern of putting everything into a single `SystemMessage` does not work. Every agent node now sends `[SystemMessage(prompt), HumanMessage(user_query)]` to satisfy the Qwen3 chat template.
 
-`langchain-mcp-adapters` was a constant source of dependency churn. The library's lower bound on `langchain-core` moved upward every few releases, and pinning either side broke installs. The fix was to remove the dependency entirely and write the bridge ourselves in 70 lines using only the `mcp` SDK and `pydantic.create_model`. This also fixed a bug in the 0.0.x line where `get_tools()` silently returned an empty list outside an `async with` block.
-
-FastMCP crashes during tool registration when it sees subscripted type annotations like `Optional[str]` or anything left as a string by `from __future__ import annotations`. The fix is to remove `from __future__ import annotations` from MCP server files and stick to bare class annotations in tool signatures.
-
 Milvus 2.4's expression parser rejects `LIKE` filters with leading wildcards (`failed to create query plan`). I pulled the threat actor filter out of Milvus and do it as a soft post filter in Python instead. The embedding ranking already pulls the relevant chunks to the top, so the post filter is more of a tiebreaker than a hard constraint.
 
 The retrieval agent initially skipped all tool calls and answered from general knowledge. The cause was a prompt that mixed text format ReACT instructions (Thought / Action / Observation) with the OpenAI function calling interface. Qwen3 looked at the conflicting instructions and just generated a text response. Rewriting the prompt to drop the text format and explicitly mandate function calls fixed it.
 
-The `httpx` body stripper alone has paid for itself across three different vLLM versions. None of these issues are findable through search; you find them by reading the actual request bodies, response bodies, and stack traces and working backward.
-
 ## Roadmap
 
 Caching is the biggest gap. External enrichment API calls (VirusTotal, AbuseIPDB) are slow and rate limited; the same IOC gets looked up dozens of times across runs. A small Redis or Postgres backed cache in front of the enrichment MCP server would cut latency from around one second per call to single digit milliseconds on hot indicators, and keep the API quotas from getting hammered. Same idea but with shorter TTLs for `vector_search` results within a session.
-
-Background ingestion. Right now seeding is manual. A cron container, or an Airflow DAG, or a Kubernetes CronJob in a production deployment would pull RSS feeds hourly and STIX/TAXII feeds daily. The ingestion pipeline is idempotent on RSS items thanks to URL based hashing, so re-running it is safe.
-
-Tracing. The LangSmith env var is already wired into `.env`. Turning it on and standing up an observability dashboard is mostly configuration.
-
-Authentication. Currently single tenant. SSO and per user RBAC controlling which tools each analyst can use would be a real production requirement.
-
-DPO training. The `agent_runs` and `feedback` tables already form a DPO ready pair dataset (winning answer = thumbs up, losing answer = thumbs down on the same query). A scheduled fine tuning job emitting a new Qwen adapter weekly is the obvious next move once we have enough labelled traffic.
-
-Threat actor entity disambiguation. The dictionary in `extractors.py` treats "APT41" and "Wicked Panda" as separate strings. They should resolve to the same Neo4j node via the `aliases` field on the STIX intrusion set. The KG already has the data; the extractor needs to consult it.
-
-## Scope notes
-
-The CTI reports are public RSS feeds plus a small synthetic seed set. Production ingests from paid threat intel feeds, internal sensors, and customer specific sources that cannot be shared. The IOC database here has about ten demo indicators; production has tens of thousands continually backfilled. The STIX knowledge graph is MITRE ATT&CK only; production also has custom intrusion set and campaign nodes maintained by analysts. External enrichment defaults to mock mode; set the relevant API key env vars to hit real providers. The frontend is intentionally minimal, enough to demonstrate every agentic capability cleanly but not a polished SOC console.
-
-The agent architecture, MCP server design, prompt techniques, validation loop, and human in the loop feedback storage match production exactly. Only the data is different.
-
-## Acknowledgements
-
-MITRE ATT&CK STIX bundle (CC BY 4.0). `iocextract` for IOC regex patterns. The MCP working group for the protocol spec. The system replaces an earlier non agentic CTI bot we built in house, which is what motivated the move to a proper Agentic architecture.
