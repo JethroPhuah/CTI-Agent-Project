@@ -5,7 +5,7 @@ A multi agent platform that automates the routine half of a Cyber Threat Intelli
 This repository is a public, synthetic data version of a production Agentic AI stack I built and run at work. The agent architecture, prompting patterns, MCP server design, and validation loop here are the same as production. The actual data sources, paid feeds, and customer specific connectors have been replaced with RSS feeds, MITRE ATT&CK, and deterministic mocks so the project can ship as a portfolio piece without leaking anything sensitive.
 
 ## CTI Agent Demo
-https://github.com/user-attachments/assets/0a93020c-95c0-4286-aa57-9a8d0f49736d
+https://github.com/user-attachments/assets/9e71959c-be0c-4350-b612-42294c320317
 
 ## What an analyst's flow looks like in the system
 
